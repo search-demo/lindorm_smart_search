@@ -1,0 +1,21 @@
+# AI host
+AI_HOST="ld-xxx-proxy-ai-pub.lindorm.aliyuncs.com" 
+AI_PORT="9002"
+
+# Row host
+ROW_HOST="ld-xx-proxy-lindorm-pub.lindorm.aliyuncs.com"
+ROW_PORT="33060"
+
+# Search host
+SEARCH_HOST="ld-xx-proxy-search-pub.lindorm.aliyuncs.com"
+SEARCH_PORT="30070"
+
+# Lindorm user password
+LD_USER="root"
+LD_PASSWORD="xxx"
+
+LOAD_FILE_PATH="data/cmrc2018_train.json"
+
+SEARCH_TOP_K="5"
+
+DASHSCOPE_API_KEY="sk-xxx"

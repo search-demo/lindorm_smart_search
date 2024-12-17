@@ -1,0 +1,8 @@
+langchain
+dashscope==1.20.3
+opensearch-py==2.6.0
+mysql-connector-python==8.0.11
+requests>=2.31.0,<2.34.0
+tqdm==4.66.2
+IPython==8.16.1
+environs
