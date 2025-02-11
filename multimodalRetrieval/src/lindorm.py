@@ -14,7 +14,7 @@ class Lindorm:
         self.dimension = 1024
         self.headers = {"x-ld-ak": Config.LD_USER,
                         "x-ld-sk": Config.LD_PASSWORD}
-        self.index_name = "multimodal_retrieval_flowers2"
+        self.index_name = "multimodal_retrieval_flowers"
         try:
             self.client = OpenSearch(
                 hosts=[{"host": Config.SEARCH_HOST, "port": Config.SEARCH_PORT}],
