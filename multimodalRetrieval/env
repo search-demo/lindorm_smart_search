@@ -1,0 +1,16 @@
+# AI host
+AI_HOST="ld-xxxxx-proxy-ai-pub.lindorm.aliyuncs.com"
+AI_PORT="9002"
+
+# Search host
+SEARCH_HOST="ld-xxxxx-proxy-search-pub.lindorm.aliyuncs.com"
+SEARCH_PORT="30070"
+
+# Lindorm user password
+LD_USER="root"
+LD_PASSWORD="******"
+
+SEARCH_TOP_K="9"
+
+LD_VL_MODEL="bge_visual0"
+LD_TEXT_MODEL="bge_m3_model"
