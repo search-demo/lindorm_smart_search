@@ -20,8 +20,6 @@ class Config:
     LD_USER = env.str("LD_USER", 'root')
     LD_PASSWORD = env.str("LD_PASSWORD", '')
 
-    LOAD_FILE_PATH = env.str("LOAD_FILE_PATH", "")
-
     SEARCH_TOP_K = env.str("SEARCH_TOP_K", "5")
 
     DASHSCOPE_API_KEY = env.str("DASHSCOPE_API_KEY", "")

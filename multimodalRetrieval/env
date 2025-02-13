@@ -12,5 +12,7 @@ LD_PASSWORD="******"
 
 SEARCH_TOP_K="9"
 
+DASHSCOPE_API_KEY="sk-xxxx"
+
 LD_VL_MODEL="bge_visual0"
 LD_TEXT_MODEL="bge_m3_model"
