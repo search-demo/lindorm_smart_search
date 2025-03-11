@@ -6,4 +6,7 @@ requests>=2.31.0,<2.34.0
 tqdm==4.66.2
 IPython==8.16.1
 environs~=14.1.0
+numpy==1.26.4
+ipywidgets==8.1.5
+langchain_community
 jupyter
