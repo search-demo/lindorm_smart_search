@@ -1,9 +1,7 @@
-### multimodalRetrieval 
-多模态检索样例
+## multimodalRetrieval 
 
-    1. 图片一键入库
-    2. 图片检索，以图搜图、以文搜图
-    3. 图片去重入库
+* 多模态检索样demo，结合 Lindorm 与百炼共同实现图文多模态检索
+
 
 ### textsplitter
-文本切分
+* 文本切分

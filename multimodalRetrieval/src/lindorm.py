@@ -1,203 +1,365 @@
 # -*- coding: utf-8 -*-
 import json
 import random
-import base64
-from http import HTTPStatus
 
-import dashscope
 import requests
 from opensearchpy import OpenSearch
 
-from . import Config
+from src.config import Config
 
 
 class Lindorm:
-    def __init__(self, index_name: str = "multimodal_retrieval_index"):
+    def __init__(self, index_name: str):
         self.random = random.Random(0)
-        self.top_k = int(Config.SEARCH_TOP_K)
-        self.dimension = 1024
-        self.headers = {"x-ld-ak": Config.LD_USER,
-                        "x-ld-sk": Config.LD_PASSWORD}
         self.index_name = index_name
-        self.api_key = Config.DASHSCOPE_API_KEY
-        try:
-            self.client = OpenSearch(
-                hosts=[{"host": Config.SEARCH_HOST, "port": Config.SEARCH_PORT}],
-                http_auth=(Config.LD_USER, Config.LD_PASSWORD),
-                http_compress=False,
-                use_ssl=False,
-            )
-        except Exception as e:
-            print("Connection search error", e)
+        self.lindormSearch = self.LindormSearch(self)
+        self.lindormAI = self.LindormAI(self)
 
-    def qwen_vl_picture_withdraw(self, file_path):
-        """Simple single round multimodal conversation call.
-        """
-        image_path = f"file://{file_path}"
-
-        # 构建消息
-        messages = [
-            {"role": "system", "content": [{"text": "You are a helpful assistant."}]},
-            {"role": "user", "content": [{"image": image_path}, {"text": "图中描绘的是什么景象?"}]}
-        ]
-
-        # 调用模型
-        response = dashscope.MultiModalConversation.call(
-            api_key=self.api_key,  # 如果没有配置环境变量，请直接使用API Key
-            model='qwen-vl-max-latest',
-            messages=messages
-        )
-
-        # The response status_code is HTTPStatus.OK indicate success,
-        # otherwise indicate request is failed, you can get error code
-        # and message from code and message.
-        if response.status_code == HTTPStatus.OK:
-            result = response.output.get('choices')[0].get('message').get('content')[0].get('text')
-            return 0, result
+    def index_check(self, clear_index: bool, index_body: dict):
+        if self.lindormSearch.detect():
+            print('连接成功')
         else:
-            print(response)
-            print(messages, response.code, response.message)  # The error code.
-            # raise Exception("http request failed, status code: {}".format(response.message))
-            return response.status_code, response.message
+            print('连接失败')
+            raise Exception("连接失败")
 
-    def post_model_request(self, model: str, data: dict):
-        data = json.dumps(data)
-        url = 'http://{}:{}/v1/ai/models/{}/infer'.format(Config.AI_HOST, Config.AI_PORT, model)
-        try:
-            result = requests.post(url, data=data, headers=self.headers, verify=False)
-            # 确保请求成功
-            result.raise_for_status()
-            # print(f'请求成功: {url}, 返回: {result.json()}')
-            return 0, result.json()['data'][0]
-        except requests.exceptions.Timeout:
-            return -1, "请求超时"
-        except requests.exceptions.HTTPError as http_err:
-            return -1, f"HTTP 错误: {http_err}"
-        except requests.exceptions.RequestException as err:
-            return -1, f"请求发生错误: {err}"
+        if self.lindormSearch.get_index():
+            if clear_index:
+                print("索引已存在, 删除索引,重新导入数据")
+                self.lindormSearch.drop_index()
+                self.lindormSearch.create_search_index(index_body)
+                print('索引创建成功')
+        else:
+            self.lindormSearch.create_search_index(index_body)
+            print('索引创建成功')
 
-    def picture_embedding(self, image):
-        encoded_str = base64.b64encode(image).decode('utf-8')
-        data = {"input": {"images": [encoded_str]}}
-        return self.post_model_request(Config.LD_VL_MODEL, data)
+    class LindormSearch:
+        def __init__(self, parent):
+            self.parent = parent
+            self.index_name = self.parent.index_name
+            self.search_host = Config.SEARCH_LINK.split(":")[0]
+            self.search_port = Config.SEARCH_LINK.split(":")[1]
+            try:
+                self.client = OpenSearch(
+                    hosts=[{"host": self.search_host, "port": self.search_port}],
+                    http_auth=(Config.LD_USER, Config.LD_PASSWORD),
+                    http_compress=False,
+                    use_ssl=False,
+                    pool_maxsize=128,
+                    timeout=120
+                )
+            except Exception as e:
+                print("Connection search error", e)
 
-    def text_embedding(self, text: str):
-        data = {"input": [text]}
-        return self.post_model_request(Config.LD_TEXT_MODEL, data)
+        def get_ingest_pipeline(self, pipeline_name: str):
+            try:
+                return self.client.ingest.get_pipeline(pipeline_name)
+            except Exception as e:
+                if e.status_code == 404:
+                    print("pipeline not found")
+                    return None
+                else:
+                    raise e
 
-    def image_text_embedding(self, image, text):
-        encoded_str = base64.b64encode(image).decode('utf-8')
-        data = {"input": [{"image": encoded_str, "text": text}]}
-        return self.post_model_request(Config.LD_VL_MODEL, data)
+        def create_ingest_pipeline(self, pipeline_name: str, body):
+            try:
+                return self.client.ingest.put_pipeline(pipeline_name, body)
+            except Exception as e:
+                if e.status_code == 409:
+                    print("pipeline already exists")
+                    return None
+                else:
+                    raise e
 
-    # 创建搜索索引,包含图片向量列
-    def create_search_index(self):
-        body = {
-            "settings": {
-                "index": {
-                    "number_of_shards": 2,
-                    "knn": True
-                }
-            },
-            "mappings": {
-                "_source": {
-                    "excludes": ["image_embedding"]
-                },
-                "properties": {
-                    "image_embedding": {
-                        "type": "knn_vector",
-                        "dimension": self.dimension,
-                        "data_type": "float",
-                        "method": {
-                            "engine": "lvector",
-                            "name": "hnsw",
-                            "space_type": "cosinesimil",
-                            "parameters": {
-                                "m": 24,
-                                "ef_construction": 500
-                            }
+        def get_search_pipeline(self, pipeline_name: str):
+            try:
+                return self.client.search_pipeline.get(pipeline_name)
+            except Exception as e:
+                if e.status_code == 404:
+                    print("pipeline not found")
+                    return None
+                else:
+                    raise e
+
+        def create_search_pipeline(self, pipeline_name: str, body):
+            try:
+                return self.client.search_pipeline.put(pipeline_name, body)
+            except Exception as e:
+                if e.status_code == 409:
+                    print("pipeline already exists")
+                    return None
+                else:
+                    raise e
+
+        def detect(self):
+            try:
+                self.client.cat.indices()
+                return True
+            except Exception as e:
+                print("Connection search error", e)
+                return False
+
+        # 创建搜索索引,包含图片向量列
+        def create_search_index(self, body):
+            return self.client.indices.create(index=self.index_name, body=body, timeout=60)
+
+        def drop_index(self):
+            return self.client.indices.delete(index=self.index_name, timeout=60)
+
+        def get_index(self):
+            try:
+                return self.client.indices.get(index=self.index_name)
+            except Exception as e:
+                if e.status_code == 404:
+                    print("index not found")
+                    return None
+                else:
+                    raise e
+
+        def index_count(self):
+            return self.client.count(index=self.index_name)
+
+        def build_index(self, vector_column: str):
+            body = {
+                "indexName": self.index_name,
+                "fieldName": vector_column,
+                "removeOldIndex": "true"
+            }
+            return self.client.transport.perform_request(
+                method="POST",
+                url='/_plugins/_vector/index/build',
+                body=body,
+                timeout=60,
+            )
+
+        def query_index_build_states(self, vector_column: str):
+            build_query = {
+                "indexName": self.index_name,
+                "fieldName": vector_column,
+                "taskIds": "[]"
+            }
+
+            return self.client.transport.perform_request(
+                method='GET',
+                url='/_plugins/_vector/index/tasks',
+                body=build_query,
+                timeout=60,
+            )
+
+        def write_doc(self, element: dict, docId: str = None):
+            return self.client.index(index=self.index_name, body=element, id=docId)
+
+        def update_doc(self, element: dict, docId: str = None):
+            body = {
+                "doc": element
+            }
+            return self.client.update(index=self.index_name, id=docId, body=body)
+
+        def get_doc(self, docId: str):
+            try:
+                return self.client.get(index=self.index_name, id=docId, _source=True)
+            except Exception as e:
+                if e.status_code == 404:
+                    return None
+                else:
+                    raise e
+
+        def delete_doc(self, docId: str):
+            return self.client.delete(index=self.index_name, id=docId)
+
+        def __search__(self, body):
+            response = self.client.search(index=self.index_name, body=body)
+            return response.get('hits').get('hits')
+
+        def search(self, body):
+            return self.__search__(body)
+
+        def knn_search(self, embedding: list, embedding_column, source: bool = True, min_score: float = 0.0,
+                       top_k: int = 0):
+            top_k = Config.SEARCH_TOP_K if top_k == 0 else top_k
+            body = {
+                "_source": source,
+                "query": {
+                    "knn": {
+                        embedding_column: {
+                            "vector": embedding,
+                            "k": top_k
                         }
-                    },
-                    "description": {
-                        "type": "text"
+                    }
+                },
+                "size": top_k,
+                "ext": {"lvector": {"min_score": str(min_score)}}
+            }
+            return self.__search__(body)
+
+        def rrf_search(self, desc, desc_column, embedding: list, embedding_column, source: bool = True,
+                       factor: float = 0.5, min_score: float = 0.0, top_k: int = 0):
+            top_k = Config.SEARCH_TOP_K if top_k == 0 else top_k
+            query = {
+                "_source": source,
+                "size": top_k,
+                "query": {
+                    "knn": {
+                        embedding_column: {
+                            "vector": embedding,
+                            "filter": {
+                                "match": {
+                                    desc_column: desc
+                                }
+                            },
+                            "k": top_k
+                        }
+                    }
+                },
+                "ext": {"lvector": {
+                    "min_score": str(min_score),
+                    "hybrid_search_type": "filter_rrf",
+                    "rrf_rank_constant": "60",
+                    "rrf_knn_weight_factor": str(factor)
+                }}
+            }
+            return self.__search__(query)
+
+        def rrf_search_with_filter(self, desc, desc_column, embedding: list, embedding_column,
+                                   conditions: dict, source: bool = True, factor: float = 0.5,
+                                   min_score: float = 0.0, top_k: int = 0):
+            top_k = Config.SEARCH_TOP_K if top_k == 0 else top_k
+            query = {
+                "_source": source,
+                "size": top_k,
+                "query": {
+                    "knn": {
+                        embedding_column: {
+                            "vector": embedding,
+                            "filter": {
+                                "bool": {
+                                    "must": [
+                                        {
+                                            "bool": {
+                                                "must": [{
+                                                    "match": {
+                                                        desc_column: {
+                                                            "query": desc
+                                                        }
+                                                    }
+                                                }]
+                                            }
+                                        },
+                                        conditions
+                                    ]
+                                }
+                            },
+                            "k": top_k
+                        }
+                    }
+                },
+                "ext": {"lvector": {
+                    "filter_type": "efficient_filter",
+                    "min_score": str(min_score),
+                    "hybrid_search_type": "filter_rrf",
+                    "rrf_rank_constant": "60",
+                    "rrf_knn_weight_factor": str(factor)
+                }}
+            }
+            return self.__search__(query)
+
+        def full_text_search(self, text, desc_column, source: bool = True, top_k: int = 0):
+            top_k = Config.SEARCH_TOP_K if top_k == 0 else top_k
+            query = {
+                "_source": source,
+                "size": top_k,
+                "query": {
+                    "match": {
+                        desc_column: text
                     }
                 }
             }
-        }
-        print(self.index_name, self.client.indices.create(self.index_name, body=body, timeout=60))
+            return self.__search__(query)
 
-    def drop_index(self):
-        print(self.client.indices.delete(index=self.index_name, timeout=60))
+        def filter_search(self, body, source, top_k: int = 0):
+            top_k = Config.SEARCH_TOP_K if top_k == 0 else top_k
+            query = {
+                "_source": source,
+                "size": top_k,
+                "query": body
+            }
+            return self.__search__(query)
 
-    def get_index(self):
-        try:
-            return self.client.indices.get(index=self.index_name)
-        except Exception as e:
-            if e.status_code == 404:
-                print("index not found")
-                return None
-            else:
-                raise e
+    class LindormAI:
+        def __init__(self, parent):
+            self.parent = parent
+            self.ai_host = Config.AI_LINK.split(":")[0]
+            self.ai_port = Config.AI_LINK.split(":")[1]
+            self.headers = {"x-ld-ak": Config.LD_USER,
+                            "x-ld-sk": Config.LD_PASSWORD}
 
-    def index_count(self):
-        return self.client.count(index=self.index_name)
+        def post_model_request(self, url: str, body: dict):
+            # print(f"url {url}, body {body}, headers {self.headers}")
+            result = requests.post(url=url, json=body, headers=self.headers)
+            # 确保请求成功
+            result.raise_for_status()
+            return result.json()
 
-    def write_doc(self, url: str, image_embedding: list):
-        element = {
-            "image_embedding": image_embedding
-        }
-        return self.client.index(self.index_name, element, id=url)
+        def embedding(self, input_type: str, content: str, model: str):
+            url = f"http://{self.ai_host}:{self.ai_port}/dashscope/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+            body = {
+                "input": {
+                    "contents": [
+                        {
+                            input_type: content
+                        }
+                    ]
+                },
+                "model": model
+            }
+            return self.post_model_request(url, body)['output']['embeddings'][0]['embedding']
 
-    def write_doc_with_description(self, url: str, description: str, embedding: list):
-        element = {
-            "image_embedding": embedding,
-            "description": description
-        }
-        return self.client.index(self.index_name, element, id=url)
-
-    def get_doc(self, docId: str):
-        return self.client.get(self.index_name, docId)
-
-    def delete_doc(self, docId: str):
-        return self.client.delete(self.index_name, docId)
-
-    def knn_search(self, picture_embedding):
-        body = {
-            "query": {
-                "knn": {
-                    "image_embedding": {
-                        "vector": picture_embedding,
-                        "k": self.top_k
-                    }
-                }
-            },
-            "size": self.top_k
-        }
-        response = self.client.search(index=self.index_name, body=body)
-        return response.get('hits').get('hits')
-
-    def rrf_search(self, text, embedding):
-        query = {
-            "_source": ["description"],
-            "size": self.top_k,
-            "query": {
-                "knn": {
-                    "image_embedding": {
-                        "vector": embedding,
-                        "filter": {
-                            "match": {
-                                "description": text
+        def vl_picture_withdraw(self, img_url: str, model: str, prompt: str):
+            url = f"http://{self.ai_host}:{self.ai_port}/dashscope/compatible-mode/v1/chat/completions"
+            body = {
+                "messages": [
+                    {
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": img_url,
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
                             }
-                        },
-                        "k": self.top_k
+                        ],
+                        "role": "user"
                     }
-                }
-            },
-            "ext": {"lvector": {
-                "hybrid_search_type": "filter_rrf",
-                "rrf_rank_constant": "60",
-                "rrf_knn_weight_factor": "0.4"
-            }}
-        }
-        response = self.client.search(index=self.index_name, body=query)
-        return response.get('hits').get('hits')
+                ],
+                "model": model
+            }
+            return self.post_model_request(url, body)['choices'][0]['message']['content']
+
+        def rerank_text(self, text: str, chunks: list, model: str, top_n: int):
+            url = f"http://{self.ai_host}:{self.ai_port}/dashscope/compatible-api/v1/reranks"
+            body = {
+                "query": text,
+                "documents": chunks,
+                "top_n": top_n,
+                "model": model
+            }
+            return self.post_model_request(url, body)['results']
+
+        def rewrite_text(self, text: str, model: str, prompt: str):
+            url = f"http://{self.ai_host}:{self.ai_port}/dashscope/compatible-mode/v1/chat/completions"
+            body = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }]
+                # "response_format": {"type": "json_object"}
+            }
+            return self.post_model_request(url, body)['choices'][0]['message']['content']
